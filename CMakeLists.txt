@@ -9,6 +9,7 @@ set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(thirdparty/glfw)
 add_subdirectory(thirdparty/lua)
+add_subdirectory(thirdparty/imgui)
 
 # Vulkan
 find_package(Vulkan REQUIRED)
@@ -45,6 +46,7 @@ if(WIN32)
             d3d12
             OpenGL::GL
             lua_lib
+            imgui
     )
 else()
     target_link_libraries(

@@ -32,6 +32,9 @@
 #include <set>
 #include <array>
 #include <chrono>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -156,6 +159,7 @@ private:
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
     std::vector<VkFramebuffer> swapChainFrameBuffers;
+    uint32_t minImageCount;
     VkCommandPool commandPool;
     std::vector<VkCommandBuffer> commandBuffers;
     std::vector<VkSemaphore> imageAvailableSemaphores;
@@ -173,6 +177,7 @@ private:
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     VkDescriptorPool descriptorPool;
+    VkDescriptorPool imguiPool;
     std::vector<VkDescriptorSet> descriptorSets;
     VkImage textureImage;
     VkDeviceMemory textureImageMemory;
@@ -181,6 +186,7 @@ private:
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
+    ImDrawData* drawData;
 
     void initWindow()
     {
@@ -223,6 +229,7 @@ private:
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
+        initImGui();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -616,18 +623,18 @@ private:
         VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
         VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
 
-        uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1; // one more image to have "room" for more processing
-        if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount)
+        minImageCount = swapChainSupport.capabilities.minImageCount + 1; // one more image to have "room" for more processing
+        if (swapChainSupport.capabilities.maxImageCount > 0 && minImageCount > swapChainSupport.capabilities.maxImageCount)
         {
             // making sure we don't exceed the maximum number of images in the swap chain
-            imageCount = swapChainSupport.capabilities.maxImageCount;
+            minImageCount = swapChainSupport.capabilities.maxImageCount;
         }
-        std::cout << "Minimum image count in the swap chain: " << imageCount << std::endl;
+        std::cout << "Minimum image count in the swap chain: " << minImageCount << std::endl;
 
         VkSwapchainCreateInfoKHR createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         createInfo.surface = surface; // tying our surface to the swap chain
-        createInfo.minImageCount = imageCount;
+        createInfo.minImageCount = minImageCount;
         createInfo.imageFormat = surfaceFormat.format;
         createInfo.imageColorSpace = surfaceFormat.colorSpace;
         createInfo.imageExtent = extent;
@@ -669,9 +676,9 @@ private:
         }
 
         // retrieve swap chain images
-        vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
-        swapChainImages.resize(imageCount);
-        vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
+        vkGetSwapchainImagesKHR(device, swapChain, &minImageCount, nullptr);
+        swapChainImages.resize(minImageCount);
+        vkGetSwapchainImagesKHR(device, swapChain, &minImageCount, swapChainImages.data());
 
         swapChainImageFormat = surfaceFormat.format;
         swapChainExtent = extent;
@@ -758,6 +765,17 @@ private:
         VkAttachmentReference depthAttachmentRef{};
         depthAttachmentRef.attachment = 1;
         depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        // FIXME: imgui
+//        VkAttachmentDescription imguiAttachment{};
+//        imguiAttachment.format = swapChainImageFormat;
+//        imguiAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+//        imguiAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // draw imgui above all the other rendered objects
+//        imguiAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+//        imguiAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+//        imguiAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+//        imguiAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+//        imguiAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
         // subpass
         VkSubpassDescription subpass{};
@@ -1458,6 +1476,14 @@ private:
         }
     }
 
+    void loadImGuiFont()
+    {
+        VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+        ImGui_ImplVulkan_CreateFontsTexture(commandBuffer);
+        endSingleTimeCommands(commandBuffer);
+        ImGui_ImplVulkan_DestroyFontUploadObjects();
+    }
+
     void createVertexBuffer()
     {
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
@@ -1721,16 +1747,98 @@ private:
         }
     }
 
+    void initImGui()
+    {
+        // create descriptor pool for imgui
+        VkDescriptorPoolSize poolSizes[] =
+                {
+                        { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+                        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+                        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+                        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+                        { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+                        { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+                        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+                        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+                        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+                        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+                        { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+                };
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.maxSets = 1000;
+        poolInfo.poolSizeCount = std::size(poolSizes);
+        poolInfo.pPoolSizes = poolSizes;
+
+        if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &imguiPool) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create descriptor pool for ImGui");
+        }
+
+        // init imgui
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO io = ImGui::GetIO(); (void) io;
+        io.Fonts->AddFontDefault();
+        ImGui::StyleColorsDark();
+
+        // init imgui for glfw window
+        ImGui_ImplGlfw_InitForVulkan(window, false);
+
+        // bind imgui with vulkan
+        ImGui_ImplVulkan_InitInfo initInfo{};
+        initInfo.Instance = instance;
+        initInfo.PhysicalDevice = physicalDevice;
+        initInfo.Device = device;
+        initInfo.Queue = graphicsQueue;
+        initInfo.DescriptorPool = imguiPool;
+        initInfo.MinImageCount = minImageCount;
+        initInfo.ImageCount = minImageCount;
+        initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        initInfo.PipelineCache = VK_NULL_HANDLE;
+        initInfo.Allocator = nullptr;
+
+        // init imgui for vulkan
+        ImGui_ImplVulkan_Init(&initInfo, renderPass);
+
+        // upload font textures to the GPU
+        loadImGuiFont();
+    }
+
     void mainLoop()
     {
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
-            drawFrame();
+
+            imguiBeginFrame();
+            imguiDrawFrame(); // issue imgui commands
+            imguiEndFrame();
+
+            drawFrame(); // present to the screen
         }
 
         // waiting for the logical device to finish operations before exiting and destroying the window
         vkDeviceWaitIdle(device);
+    }
+
+    void imguiBeginFrame()
+    {
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+    }
+
+    void imguiDrawFrame()
+    {
+        ImGui::ShowDemoWindow();
+    }
+
+    void imguiEndFrame()
+    {
+        ImGui::Render();
     }
 
     void drawFrame()
@@ -1816,6 +1924,11 @@ private:
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
+    // TODO: Create a command buffer (and render pass?) only for IMGUI
+    //     https://frguthmann.github.io/posts/vulkan_imgui/
+    //     https://github.com/ocornut/imgui/wiki/Integrating-with-Vulkan
+    //     https://vkguide.dev/docs/extra-chapter/implementing_imgui/
+
     void cleanupSwapChain()
     {
         for (auto framebuffer : swapChainFrameBuffers)
@@ -1847,6 +1960,11 @@ private:
     void cleanup()
     {
         cleanupSwapChain();
+
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        vkDestroyDescriptorPool(device, imguiPool, nullptr);
 
         vkDestroyImageView(device, depthImageView, nullptr);
         vkDestroyImage(device, depthImage, nullptr);
